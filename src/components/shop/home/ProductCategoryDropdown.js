@@ -1,8 +1,9 @@
-import React, { Fragment, useContext, useState, useEffect } from "react";
+import React, { Fragment, useContext, useState, useEffect, useCallback } from "react";
 import { useHistory } from "react-router-dom";
 import { HomeContext } from "./index";
 import { getAllCategory } from "../../admin/categories/FetchApi";
-import { getAllProduct, productByPrice } from "../../admin/products/FetchApi";
+import { getAllProduct } from "../../admin/products/FetchApi";
+import DualRangeSlider from "../../ui/DualRangeSlider";
 import "./style.css";
 
 const apiURL = process.env.REACT_APP_API_URL;
@@ -11,6 +12,8 @@ const CategoryList = () => {
   const history = useHistory();
   const { data } = useContext(HomeContext);
   const [categories, setCategories] = useState(null);
+  const [allCategories, setAllCategories] = useState(null);
+  const [categorySearch, setCategorySearch] = useState("");
 
   useEffect(() => {
     fetchData();
@@ -21,15 +24,39 @@ const CategoryList = () => {
       let responseData = await getAllCategory();
       if (responseData && responseData.Categories) {
         setCategories(responseData.Categories);
+        setAllCategories(responseData.Categories);
       }
     } catch (error) {
       console.log(error);
     }
   };
 
+  const handleCategorySearch = (e) => {
+    const value = e.target.value;
+    setCategorySearch(value);
+    
+    if (value.trim() === "") {
+      setCategories(allCategories);
+    } else {
+      const filtered = allCategories.filter((cat) =>
+        cat.cName.toUpperCase().includes(value.trim().toUpperCase())
+      );
+      setCategories(filtered);
+    }
+  };
+
   return (
     <div className={`${data.categoryListDropdown ? "" : "hidden"} my-4`}>
       <hr />
+      <div className="py-4">
+        <input
+          value={categorySearch}
+          onChange={handleCategorySearch}
+          className="w-full px-4 py-3 focus:outline-none border border-gray-200 rounded"
+          type="text"
+          placeholder="Search categories..."
+        />
+      </div>
       <div className="py-1 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
         {categories && categories.length > 0 ? (
           categories.map((item, index) => {
@@ -58,71 +85,85 @@ const CategoryList = () => {
   );
 };
 
-const FilterList = () => {
+const CombinedSearchFilter = () => {
   const { data, dispatch } = useContext(HomeContext);
-  const [range, setRange] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sliderValues, setSliderValues] = useState([0, 1000]);
+  const [productArray, setProductArray] = useState(null);
 
-  const rangeHandle = (e) => {
-    setRange(e.target.value);
-    fetchData(e.target.value);
-  };
-
-  const fetchData = async (price) => {
-    if (price === "all") {
-      try {
-        let responseData = await getAllProduct();
-        if (responseData && responseData.Products) {
-          dispatch({ type: "setProducts", payload: responseData.Products });
-        }
-      } catch (error) {
-        console.log(error);
-      }
-    } else {
-      dispatch({ type: "loading", payload: true });
-      try {
-        setTimeout(async () => {
-          let responseData = await productByPrice(price);
-          if (responseData && responseData.Products) {
-            console.log(responseData.Products);
-            dispatch({ type: "setProducts", payload: responseData.Products });
-            dispatch({ type: "loading", payload: false });
-          }
-        }, 700);
-      } catch (error) {
-        console.log(error);
-      }
+  const ensureProducts = useCallback(async () => {
+    if (productArray) return productArray;
+    dispatch({ type: "loading", payload: true });
+    try {
+      const responseData = await getAllProduct();
+      const products = responseData && responseData.Products ? responseData.Products : [];
+      setProductArray(products);
+      dispatch({ type: "loading", payload: false });
+      return products;
+    } catch (error) {
+      console.log(error);
+      dispatch({ type: "loading", payload: false });
+      return [];
     }
+  }, [dispatch, productArray]);
+
+  const applyFilters = useCallback(async (overrides = {}) => {
+    const products = await ensureProducts();
+    const search = overrides.search ?? searchQuery;
+    const priceRange = overrides.priceRange ?? sliderValues;
+    const [min, max] = priceRange;
+
+    const filtered = products.filter((item) => {
+      // Search in both title AND description
+      const searchableText = `${item.pName || ""} ${item.pDescription || ""}`.toUpperCase();
+      const searchMatch =
+        search.trim() === "" ||
+        searchableText.includes(search.trim().toUpperCase());
+      
+      // Price range filter
+      const price = parseFloat(item.pPrice);
+      const priceOk = !Number.isNaN(price) && price >= min && price <= max;
+      
+      return searchMatch && priceOk;
+    });
+
+    dispatch({ type: "setProducts", payload: filtered });
+  }, [ensureProducts, searchQuery, sliderValues, dispatch]);
+
+  useEffect(() => {
+    if (data.searchFilterDropdown) {
+      ensureProducts().then((products) => {
+        dispatch({ type: "setProducts", payload: products });
+      });
+    }
+  }, [data.searchFilterDropdown, ensureProducts, dispatch]);
+
+  const closePanel = async () => {
+    const products = await ensureProducts();
+    dispatch({ type: "setProducts", payload: products });
+    setSearchQuery("");
+    setSliderValues([0, 1000]);
+    dispatch({ type: "searchFilterDropdown", payload: false });
   };
 
-  const closeFilterBar = () => {
-    fetchData("all");
-    dispatch({ type: "filterListDropdown", payload: !data.filterListDropdown });
-    setRange(0);
+  const handleSearchChange = (e) => {
+    const value = e.target.value;
+    setSearchQuery(value);
+    applyFilters({ search: value });
+  };
+
+  const handleValueChange = (newValues) => {
+    setSliderValues(newValues);
+    applyFilters({ priceRange: newValues });
   };
 
   return (
-    <div className={`${data.filterListDropdown ? "" : "hidden"} my-4`}>
+    <div className={`${data.searchFilterDropdown ? "" : "hidden"} my-4`}>
       <hr />
-      <div className="w-full flex flex-col">
-        <div className="font-medium py-2">Filter by price</div>
+      <div className="w-full flex flex-col space-y-4">
         <div className="flex justify-between items-center">
-          <div className="flex flex-col space-y-2  w-2/3 lg:w-2/4">
-            <label htmlFor="points" className="text-sm">
-              Price (between 0 and 10$):{" "}
-              <span className="font-semibold text-yellow-700">{range}.00$</span>{" "}
-            </label>
-            <input
-              value={range}
-              className="slider"
-              type="range"
-              id="points"
-              min="0"
-              max="1000"
-              step="10"
-              onChange={(e) => rangeHandle(e)}
-            />
-          </div>
-          <div onClick={(e) => closeFilterBar()} className="cursor-pointer">
+          <div className="font-medium">Search &amp; Filter</div>
+          <div onClick={closePanel} className="cursor-pointer">
             <svg
               className="w-8 h-8 text-gray-700 hover:bg-gray-200 rounded-full p-1"
               fill="none"
@@ -139,76 +180,32 @@ const FilterList = () => {
             </svg>
           </div>
         </div>
-      </div>
-    </div>
-  );
-};
 
-const Search = () => {
-  const { data, dispatch } = useContext(HomeContext);
-  const [search, setSearch] = useState("");
-  const [productArray, setPa] = useState(null);
-
-  const searchHandle = (e) => {
-    setSearch(e.target.value);
-    fetchData();
-    dispatch({
-      type: "searchHandleInReducer",
-      payload: e.target.value,
-      productArray: productArray,
-    });
-  };
-
-  const fetchData = async () => {
-    dispatch({ type: "loading", payload: true });
-    try {
-      setTimeout(async () => {
-        let responseData = await getAllProduct();
-        if (responseData && responseData.Products) {
-          setPa(responseData.Products);
-          dispatch({ type: "loading", payload: false });
-        }
-      }, 700);
-    } catch (error) {
-      console.log(error);
-    }
-  };
-
-  const closeSearchBar = () => {
-    dispatch({ type: "searchDropdown", payload: !data.searchDropdown });
-    fetchData();
-    dispatch({ type: "setProducts", payload: productArray });
-    setSearch("");
-  };
-
-  return (
-    <div
-      className={`${
-        data.searchDropdown ? "" : "hidden"
-      } my-4 flex items-center justify-between`}
-    >
-      <input
-        value={search}
-        onChange={(e) => searchHandle(e)}
-        className="px-4 text-xl py-4 focus:outline-none"
-        type="text"
-        placeholder="Search products..."
-      />
-      <div onClick={(e) => closeSearchBar()} className="cursor-pointer">
-        <svg
-          className="w-8 h-8 text-gray-700 hover:bg-gray-200 rounded-full p-1"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M6 18L18 6M6 6l12 12"
+        <div className="flex flex-col space-y-2">
+          <label className="text-sm font-medium">Search products</label>
+          <input
+            value={searchQuery}
+            onChange={handleSearchChange}
+            className="px-4 py-3 focus:outline-none border border-gray-200 rounded"
+            type="text"
+            placeholder="Search by title or description"
           />
-        </svg>
+        </div>
+
+        <div className="flex flex-col space-y-3">
+          <label className="text-sm font-medium">
+            Price range: <span className="font-semibold text-yellow-700">${sliderValues[0]}</span> - <span className="font-semibold text-yellow-700">${sliderValues[1]}</span>
+          </label>
+          <div className="pt-1 pb-2">
+            <DualRangeSlider
+              min={0}
+              max={1000}
+              step={10}
+              value={sliderValues}
+              onChange={handleValueChange}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -218,8 +215,7 @@ const ProductCategoryDropdown = (props) => {
   return (
     <Fragment>
       <CategoryList />
-      <FilterList />
-      <Search />
+      <CombinedSearchFilter />
     </Fragment>
   );
 };
