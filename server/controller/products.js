@@ -29,15 +29,19 @@ class Product {
 
   async getAllProduct(req, res) {
     try {
+      console.log("Fetching all products...");
       let Products = await productModel
         .find({})
         .populate("pCategory", "_id cName")
-        .sort({ _id: -1 });
+        .sort({ _id: -1 })
+        .maxTimeMS(5000); // 5 second timeout
+      console.log(`Found ${Products.length} products`);
       if (Products) {
         return res.json({ Products });
       }
     } catch (err) {
-      console.log(err);
+      console.log("Error in getAllProduct:", err);
+      return res.status(500).json({ error: "Failed to fetch products", message: err.message });
     }
   }
 
